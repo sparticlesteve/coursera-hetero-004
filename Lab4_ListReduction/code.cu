@@ -42,6 +42,9 @@ __global__ void reductionKernel(float * input, float * output, int len)
 
     //@@ Write the computed sum of the block to the output vector at the 
     //@@ correct index
+    // Woops. All threads are doing this. Luckily there's no real race
+    // condition. Just a waste of resources.
+    // TODO: fix this!!
     output[blockIdx.x] = shared[0];
 }
 
