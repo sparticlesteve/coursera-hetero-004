@@ -189,7 +189,8 @@ int main(int argc, char ** argv) {
     wbTime_stop(GPU, "Clearing output memory.");
 
     wbTime_start(GPU, "Copying input memory to the GPU.");
-    wbCheck(cudaMemcpy(deviceInput, hostInput, numElements*sizeof(float), cudaMemcpyHostToDevice));
+    wbCheck(cudaMemcpy(deviceInput, hostInput, numElements*sizeof(float),
+            cudaMemcpyHostToDevice));
     wbTime_stop(GPU, "Copying input memory to the GPU.");
 
     wbTime_start(Compute, "Performing CUDA computation");
@@ -205,7 +206,8 @@ int main(int argc, char ** argv) {
     // Run scan on the aux array
     // This will only work if the aux problem fits into one block.
     // Using one aux array and scanning in-place.
-    scan<<<1, auxBlockSize, numAuxElements*sizeof(float)>>>(deviceAux, deviceAux, numAuxElements);
+    scan<<<1, auxBlockSize, numAuxElements*sizeof(float)>>>
+        (deviceAux, deviceAux, numAuxElements);
     cudaDeviceSynchronize();
 
     // Add the aux array elements into the corresponding block sections
@@ -215,8 +217,10 @@ int main(int argc, char ** argv) {
     wbTime_stop(Compute, "Performing CUDA computation");
 
     wbTime_start(Copy, "Copying output memory to the CPU");
-    wbCheck(cudaMemcpy(hostOutput, deviceOutput, numElements*sizeof(float), cudaMemcpyDeviceToHost));
-    //wbCheck(cudaMemcpy(hostAux, deviceAux, numAuxElements*sizeof(float), cudaMemcpyDeviceToHost));
+    wbCheck(cudaMemcpy(hostOutput, deviceOutput, numElements*sizeof(float),
+            cudaMemcpyDeviceToHost));
+    //wbCheck(cudaMemcpy(hostAux, deviceAux, numAuxElements*sizeof(float),
+    //        cudaMemcpyDeviceToHost));
     wbTime_stop(Copy, "Copying output memory to the CPU");
     
     // Debugging the aux array
