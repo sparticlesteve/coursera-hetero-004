@@ -1,4 +1,4 @@
-// Histogram Equalization
+`// Histogram Equalization
 
 #include    <wb.h>
 
@@ -37,7 +37,7 @@ __global__ void convertToGrayScale(unsigned char* input, unsigned char* output,
                                    int numPixels)
 {
     // Pixel index
-    int i = (blockIdx*blockDim.x + threadIdx.x)*3;
+    int i = (blockIdx.x*blockDim.x + threadIdx.x)*3;
     if(i < numPixels){
         // Combine red, blue, green to produce gray
         unsigned char r = input[i];
@@ -46,6 +46,13 @@ __global__ void convertToGrayScale(unsigned char* input, unsigned char* output,
         // These factors were provided in the assignment
         output[i] = (unsigned char) (0.21*r + 0.71*g + 0.07*b);
     }
+}
+
+//-----------------------------------------------------------------------------
+// Calculate histogram from grayscale data
+//-----------------------------------------------------------------------------
+__global__ void computeHistogram(unsigned char* input, int* histogram, int numPixels)
+{
 }
 
 //-----------------------------------------------------------------------------
@@ -63,6 +70,7 @@ int main(int argc, char ** argv) {
     float * deviceInputImageData;
     float * deviceOutputImageData;
     unsigned char * deviceRGBData;
+    unsigned char * deviceGrayData;
     const char * inputImageFile;
 
     //@@ Insert more code here
@@ -93,6 +101,7 @@ int main(int argc, char ** argv) {
     wbCheck( cudaMalloc((void**)&deviceInputImageData, imageLen*sizeof(float)) );
     wbCheck( cudaMalloc((void**)&deviceOutputImageData, imageLen*sizeof(float)) );
     wbCheck( cudaMalloc((void**)&deviceRGBData, imageLen*sizeof(unsigned char)) );
+    wbCheck( cudaMalloc((void**)&deviceGrayData, numPixels*sizeof(unsigned char)) );
     wbTime_stop(GPU, "Allocating GPU memory.");
     
     // Transfer input data to device
@@ -116,7 +125,7 @@ int main(int argc, char ** argv) {
     int blockSize2 = 1024;
     int gridSize2 = (imageWidth*imageHeight-1) / blockSize2 + 1;
     wbLog(INFO, "Converting RGB to grayscale with blockSize", blockSize2, ", gridSize", gridSize2);
-    convertToGrayScale(deviceRGBData, deviceGrayData, numPixels);
+    convertToGrayScale<<<gridSize2, blockSize2>>>(deviceRGBData, deviceGrayData, numPixels);
 
     // End kernel computations
     wbTime_stop(Compute, "Performing kernel computations.");
@@ -126,6 +135,7 @@ int main(int argc, char ** argv) {
     cudaFree(deviceInputImageData);
     cudaFree(deviceOutputImageData);
     cudaFree(deviceRGBData);
+    cudaFree(deviceGrayData);
     wbTime_stop(GPU, "Freeing GPU memory.");
 
     wbSolution(args, outputImage);
