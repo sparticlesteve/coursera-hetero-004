@@ -1,4 +1,4 @@
-`// Histogram Equalization
+// Histogram Equalization
 
 #include    <wb.h>
 
@@ -51,9 +51,67 @@ __global__ void convertToGrayScale(unsigned char* input, unsigned char* output,
 //-----------------------------------------------------------------------------
 // Calculate histogram from grayscale data
 //-----------------------------------------------------------------------------
-__global__ void computeHistogram(unsigned char* input, int* histogram, int numPixels)
+__global__ void computeHistogram(unsigned char* input, unsigned int* histo, int numPixels)
 {
+    // Shared copy of histogram for each thread block
+    __shared__ unsigned int sharedHist[HISTOGRAM_LENGTH];
+    // Initialize histogram
+    if(threadIdx.x < HISTOGRAM_LENGTH) sharedHist[threadIdx.x] = 0;
+    __syncthreads();
+    // Thread stride is total num of threads in the grid
+    int stride = blockDim.x * gridDim.x;
+    // Loop over my elements
+    for(int i = blockIdx.x*blockDim.x + threadIdx.x; i < numPixels; i += stride){
+        atomicAdd(&sharedHist[input[i]], 1);
+    }
+    // Wait for the whole block to finish
+    __syncthreads();
+    // Accumulate results into output
+    if(threadIdx.x < HISTOGRAM_LENGTH)
+        atomicAdd(&histo[threadIdx.x], sharedHist[threadIdx.x]);
 }
+
+//-----------------------------------------------------------------------------
+// Single-block scan kernel for calculating histogram CDF
+//-----------------------------------------------------------------------------
+/*__global__ void computeCDF(unsigned int* histo, unsigned int* cdf)
+{
+    // Thread index in the block
+    unsigned int t = threadIdx.x;
+    // Shared memory
+    __shared__ unsigned int shared[HISTOGRAM_LENGTH];
+    // Load two elements into shared memory
+    if(t < HISTOGRAM_LENGTH)
+        shared[t] = histo[t];
+    else
+        shared[t] = 0;
+    if(t + blockDim.x < HISTOGRAM_LENGTH)
+        shared[t+blockDim.x] = histo[t+blockDim.x];
+    else
+        shared[t+blockDim.x] = 0;
+    __syncthreads();
+    // Downsweep
+    for(unsigned int s = 1; s <= blockDim.x; s *= 2){
+        int index = (t+1)*s*2 - 1;
+        if(index < 2*blockDim.x){
+            shared[index] += shared[index-s];
+        }
+        __syncthreads();
+    }
+    // Upsweep
+    for(int s = blockDim.x/2; s > 0; s /= 2){
+        int index = (t+1)*s*2 - 1;
+        if(index+s < 2*blockDim.x){
+            shared[index+s] += shared[index];
+        }
+        __syncthreads();
+    }
+    // Write to global output
+    if(t < HISTOGRAM_LENGTH)
+        cdf[t] = shared[t];
+    if(t+blockDim.x < HISTOGRAM_LENGTH)
+        cdf[t+blockDim.x] = shared[t+blockDim.x];
+}*/
 
 //-----------------------------------------------------------------------------
 // Main function
@@ -65,13 +123,14 @@ int main(int argc, char ** argv) {
     int imageChannels;
     wbImage_t inputImage;
     wbImage_t outputImage;
+    const char * inputImageFile;
     float * hostInputImageData;
     float * hostOutputImageData;
     float * deviceInputImageData;
     float * deviceOutputImageData;
     unsigned char * deviceRGBData;
     unsigned char * deviceGrayData;
-    const char * inputImageFile;
+    unsigned int * deviceHist;
 
     //@@ Insert more code here
 
@@ -102,7 +161,11 @@ int main(int argc, char ** argv) {
     wbCheck( cudaMalloc((void**)&deviceOutputImageData, imageLen*sizeof(float)) );
     wbCheck( cudaMalloc((void**)&deviceRGBData, imageLen*sizeof(unsigned char)) );
     wbCheck( cudaMalloc((void**)&deviceGrayData, numPixels*sizeof(unsigned char)) );
+    wbCheck( cudaMalloc((void**)&deviceHist, HISTOGRAM_LENGTH*sizeof(unsigned int)) );
     wbTime_stop(GPU, "Allocating GPU memory.");
+    
+    // Initializing histogram
+    wbCheck( cudaMemset(deviceHist, 0, HISTOGRAM_LENGTH*sizeof(unsigned int)) );
     
     // Transfer input data to device
     wbTime_start(GPU, "Copying input to GPU.");
@@ -118,14 +181,22 @@ int main(int argc, char ** argv) {
     // Convert image data to unsigned char
     int blockSize1 = 1024;
     int gridSize1 = (imageLen-1) / blockSize1 + 1;
-    wbLog(INFO, "Converting to uchar with blockSize", blockSize1, ", gridSize", gridSize1);
+    wbLog(INFO, "Converting to uchar with blockSize ", blockSize1, ", gridSize ", gridSize1);
     convertToChar<<<gridSize1, blockSize1>>>(deviceInputImageData, deviceRGBData, imageLen);
     
     // Convert RGB to gray-scale
     int blockSize2 = 1024;
     int gridSize2 = (imageWidth*imageHeight-1) / blockSize2 + 1;
-    wbLog(INFO, "Converting RGB to grayscale with blockSize", blockSize2, ", gridSize", gridSize2);
+    wbLog(INFO, "Converting RGB to grayscale with blockSize ", blockSize2, ", gridSize ", gridSize2);
     convertToGrayScale<<<gridSize2, blockSize2>>>(deviceRGBData, deviceGrayData, numPixels);
+    
+    // Calculate the histogram
+    int blockSize3 = 512;
+    int gridSize3 = gridSize2/5; // each thread will do ~10 elements
+    wbLog(INFO, "Calculating histogram with blockSize ", blockSize3, ", gridSize ", gridSize3);
+    computeHistogram<<<gridSize3, blockSize3>>>(deviceGrayData, deviceHist, numPixels);
+
+    // Calculate the CDF via scan
 
     // End kernel computations
     wbTime_stop(Compute, "Performing kernel computations.");
@@ -136,6 +207,7 @@ int main(int argc, char ** argv) {
     cudaFree(deviceOutputImageData);
     cudaFree(deviceRGBData);
     cudaFree(deviceGrayData);
+    cudaFree(deviceHist);
     wbTime_stop(GPU, "Freeing GPU memory.");
 
     wbSolution(args, outputImage);
@@ -144,3 +216,4 @@ int main(int argc, char ** argv) {
 
     return 0;
 }
+
