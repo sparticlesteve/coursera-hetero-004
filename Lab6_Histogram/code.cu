@@ -74,7 +74,7 @@ __global__ void computeHistogram(unsigned char* input, unsigned int* histo, int 
 //-----------------------------------------------------------------------------
 // Single-block scan kernel for calculating histogram CDF
 //-----------------------------------------------------------------------------
-/*__global__ void computeCDF(unsigned int* histo, unsigned int* cdf)
+__global__ void computeCDF(unsigned int* histo, float* cdf, int numPixels)
 {
     // Thread index in the block
     unsigned int t = threadIdx.x;
@@ -107,11 +107,33 @@ __global__ void computeHistogram(unsigned char* input, unsigned int* histo, int 
         __syncthreads();
     }
     // Write to global output
+    // Scale with probability factor here
+    float factor = 1. / numPixels;
     if(t < HISTOGRAM_LENGTH)
-        cdf[t] = shared[t];
+        cdf[t] = shared[t]*factor;
     if(t+blockDim.x < HISTOGRAM_LENGTH)
-        cdf[t+blockDim.x] = shared[t+blockDim.x];
-}*/
+        cdf[t+blockDim.x] = shared[t+blockDim.x]*factor;
+}
+
+//-----------------------------------------------------------------------------
+// Histogram equalization kernel uses the CDF to scale every pixel channel.
+//-----------------------------------------------------------------------------
+__global__ equalizeImage(unsigned char* image, float* cdf, int len)
+{
+    int i = blockIdx.x*blockDim.x + threadIdx.x;
+    if(i < len){
+        // get the uchar value at this element
+        unsigned char val = image[i];
+        // compute the corrected value
+        // use float, convert to int, clamp at [0-255], and convert to char
+        // fill the image with the corrected value
+    }
+}
+
+//-----------------------------------------------------------------------------
+// Convert uchar image array back into float
+//-----------------------------------------------------------------------------
+
 
 //-----------------------------------------------------------------------------
 // Main function
@@ -131,6 +153,7 @@ int main(int argc, char ** argv) {
     unsigned char * deviceRGBData;
     unsigned char * deviceGrayData;
     unsigned int * deviceHist;
+    float * deviceCDF;
 
     //@@ Insert more code here
 
@@ -162,6 +185,7 @@ int main(int argc, char ** argv) {
     wbCheck( cudaMalloc((void**)&deviceRGBData, imageLen*sizeof(unsigned char)) );
     wbCheck( cudaMalloc((void**)&deviceGrayData, numPixels*sizeof(unsigned char)) );
     wbCheck( cudaMalloc((void**)&deviceHist, HISTOGRAM_LENGTH*sizeof(unsigned int)) );
+    wbCheck( cudaMalloc((void**)&deviceCDF, HISTOGRAM_LENGTH*sizeof(float)) );
     wbTime_stop(GPU, "Allocating GPU memory.");
     
     // Initializing histogram
@@ -197,7 +221,16 @@ int main(int argc, char ** argv) {
     computeHistogram<<<gridSize3, blockSize3>>>(deviceGrayData, deviceHist, numPixels);
 
     // Calculate the CDF via scan
+    int blockSize4 = HISTOGRAM_LENGTH/2;
+    int gridSize4 = 1;
+    wbLog(INFO, "Calculating CDF with blockSize ", blockSize4, ", gridSize ", gridSize4);
+    computeCDF<<<gridSize4, blockSize4>>>(deviceHist, deviceCDF, numPixels);
 
+    // Equalize the RGB image data using the CDF
+    int blockSize5 = blockSize1;
+    int gridSize5 = gridSize1;
+    wbLog(INFO, "Equalizing the RGB with blockSize ", blockSize5, ", gridSize ", gridSize5);
+    
     // End kernel computations
     wbTime_stop(Compute, "Performing kernel computations.");
 
@@ -208,6 +241,7 @@ int main(int argc, char ** argv) {
     cudaFree(deviceRGBData);
     cudaFree(deviceGrayData);
     cudaFree(deviceHist);
+    cudaFree(deviceCDF);
     wbTime_stop(GPU, "Freeing GPU memory.");
 
     wbSolution(args, outputImage);
@@ -216,4 +250,3 @@ int main(int argc, char ** argv) {
 
     return 0;
 }
-
