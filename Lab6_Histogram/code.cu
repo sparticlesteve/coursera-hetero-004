@@ -118,22 +118,29 @@ __global__ void computeCDF(unsigned int* histo, float* cdf, int numPixels)
 //-----------------------------------------------------------------------------
 // Histogram equalization kernel uses the CDF to scale every pixel channel.
 //-----------------------------------------------------------------------------
-__global__ equalizeImage(unsigned char* image, float* cdf, int len)
+__global__ void equalizeImage(unsigned char* image, float* cdf, int len)
 {
     int i = blockIdx.x*blockDim.x + threadIdx.x;
     if(i < len){
         // get the uchar value at this element
         unsigned char val = image[i];
         // compute the corrected value
-        // use float, convert to int, clamp at [0-255], and convert to char
-        // fill the image with the corrected value
+        int corVal = (int) ((cdf[val] - cdf[0])/(1 - cdf[0])*255);
+        if(corVal > 255) corVal = 255;
+        if(corVal < 0) corVal = 0;
+        image[i] = corVal;
     }
 }
 
 //-----------------------------------------------------------------------------
 // Convert uchar image array back into float
 //-----------------------------------------------------------------------------
-
+__global__ void convertCharToFloat(unsigned char* input, float* output, int len)
+{
+    int i = blockIdx.x*blockDim.x + threadIdx.x;
+    if(i < len)
+        output[i] = (float) (input[i]/255);
+}
 
 //-----------------------------------------------------------------------------
 // Main function
@@ -170,12 +177,12 @@ int main(int argc, char ** argv) {
     hostInputImageData = wbImage_getData(inputImage); // added
     hostOutputImageData = wbImage_getData(outputImage); // added
     wbTime_stop(Generic, "Importing data and creating memory on host");
-    
+
     // Dump some information
     wbLog(INFO, "img width  ", imageWidth);
     wbLog(INFO, "img height ", imageHeight);
     wbLog(INFO, "img chans  ", imageChannels);
-    
+
     // Allocate memory on device
     int numPixels = imageWidth*imageHeight;
     int imageLen = numPixels*imageChannels;
@@ -187,33 +194,33 @@ int main(int argc, char ** argv) {
     wbCheck( cudaMalloc((void**)&deviceHist, HISTOGRAM_LENGTH*sizeof(unsigned int)) );
     wbCheck( cudaMalloc((void**)&deviceCDF, HISTOGRAM_LENGTH*sizeof(float)) );
     wbTime_stop(GPU, "Allocating GPU memory.");
-    
+
     // Initializing histogram
     wbCheck( cudaMemset(deviceHist, 0, HISTOGRAM_LENGTH*sizeof(unsigned int)) );
-    
+
     // Transfer input data to device
     wbTime_start(GPU, "Copying input to GPU.");
     wbCheck( cudaMemcpy(deviceInputImageData, hostInputImageData,
                         imageLen*sizeof(float), cudaMemcpyHostToDevice) );
     wbTime_stop(GPU, "Copying input to GPU.");
-    
+
     //-------------------------------------------------------------------------
     // Begin kernel computations
     //-------------------------------------------------------------------------
     wbTime_start(Compute, "Performing kernel computations.");
-    
+
     // Convert image data to unsigned char
     int blockSize1 = 1024;
     int gridSize1 = (imageLen-1) / blockSize1 + 1;
     wbLog(INFO, "Converting to uchar with blockSize ", blockSize1, ", gridSize ", gridSize1);
     convertToChar<<<gridSize1, blockSize1>>>(deviceInputImageData, deviceRGBData, imageLen);
-    
+
     // Convert RGB to gray-scale
     int blockSize2 = 1024;
     int gridSize2 = (imageWidth*imageHeight-1) / blockSize2 + 1;
     wbLog(INFO, "Converting RGB to grayscale with blockSize ", blockSize2, ", gridSize ", gridSize2);
     convertToGrayScale<<<gridSize2, blockSize2>>>(deviceRGBData, deviceGrayData, numPixels);
-    
+
     // Calculate the histogram
     int blockSize3 = 512;
     int gridSize3 = gridSize2/5; // each thread will do ~10 elements
@@ -230,9 +237,22 @@ int main(int argc, char ** argv) {
     int blockSize5 = blockSize1;
     int gridSize5 = gridSize1;
     wbLog(INFO, "Equalizing the RGB with blockSize ", blockSize5, ", gridSize ", gridSize5);
+    equalizeImage<<<gridSize5, blockSize5>>>(deviceRGBData, deviceCDF, imageLen);
     
+    // Convert uchar image data back to float
+    int blockSize6 = blockSize1;
+    int gridSize6 = gridSize1;
+    wbLog(INFO, "Converting to float with blockSize ", blockSize6, ", gridSize ", gridSize6);
+    convertCharToFloat<<<blockSize6, gridSize6>>>(deviceRGBData, deviceOutputImageData, imageLen);
+
     // End kernel computations
     wbTime_stop(Compute, "Performing kernel computations.");
+    
+    // Copy output data back to host
+    wbCheck( cudaMemcpy(hostOutputImageData, deviceOutputImageData,
+                        imageLen*sizeof(float), cudaMemcpyDeviceToHost) );
+    
+    // Check solution...?
 
     // Free GPU memory
     wbTime_start(GPU, "Freeing GPU memory.");
