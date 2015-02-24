@@ -139,7 +139,7 @@ __global__ void convertCharToFloat(unsigned char* input, float* output, int len)
 {
     int i = blockIdx.x*blockDim.x + threadIdx.x;
     if(i < len)
-        output[i] = (float) (input[i]/255);
+        output[i] = (float) (input[i]/255.);
 }
 
 //-----------------------------------------------------------------------------
