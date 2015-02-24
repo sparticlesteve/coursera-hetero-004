@@ -252,7 +252,17 @@ int main(int argc, char ** argv) {
     wbCheck( cudaMemcpy(hostOutputImageData, deviceOutputImageData,
                         imageLen*sizeof(float), cudaMemcpyDeviceToHost) );
     
-    // Check solution...?
+    // Debugging: dump out N output pixels
+    const int nDump = 10;
+    const int start = 10000;
+    float* h = hostOutputImageData;
+    for(int i = start; i < start+nDump; ++i){
+        int idx = 3*i;
+        wbLog(INFO, i, " RGB ", h[idx], ", ", h[idx+1], ", ", h[idx+2]);
+    }
+    
+    // Check solution
+    wbSolution(args, outputImage);
 
     // Free GPU memory
     wbTime_start(GPU, "Freeing GPU memory.");
@@ -263,8 +273,10 @@ int main(int argc, char ** argv) {
     cudaFree(deviceHist);
     cudaFree(deviceCDF);
     wbTime_stop(GPU, "Freeing GPU memory.");
-
-    wbSolution(args, outputImage);
+    
+    // Free host memory
+    wbImage_delete(inputImage);
+    wbImage_delete(outputImage);
 
     //@@ insert code here
 
