@@ -238,7 +238,7 @@ int main(int argc, char ** argv) {
     int gridSize5 = gridSize1;
     wbLog(INFO, "Equalizing the RGB with blockSize ", blockSize5, ", gridSize ", gridSize5);
     equalizeImage<<<gridSize5, blockSize5>>>(deviceRGBData, deviceCDF, imageLen);
-    
+
     // Convert uchar image data back to float
     int blockSize6 = blockSize1;
     int gridSize6 = gridSize1;
@@ -247,11 +247,11 @@ int main(int argc, char ** argv) {
 
     // End kernel computations
     wbTime_stop(Compute, "Performing kernel computations.");
-    
+
     // Copy output data back to host
     wbCheck( cudaMemcpy(hostOutputImageData, deviceOutputImageData,
                         imageLen*sizeof(float), cudaMemcpyDeviceToHost) );
-    
+
     // Debugging: dump out N output pixels
     const int nDump = 10;
     const int start = 10000;
@@ -260,7 +260,7 @@ int main(int argc, char ** argv) {
         int idx = 3*i;
         wbLog(INFO, i, " RGB ", h[idx], ", ", h[idx+1], ", ", h[idx+2]);
     }
-    
+
     // Check solution
     wbSolution(args, outputImage);
 
@@ -273,7 +273,7 @@ int main(int argc, char ** argv) {
     cudaFree(deviceHist);
     cudaFree(deviceCDF);
     wbTime_stop(GPU, "Freeing GPU memory.");
-    
+
     // Free host memory
     wbImage_delete(inputImage);
     wbImage_delete(outputImage);
