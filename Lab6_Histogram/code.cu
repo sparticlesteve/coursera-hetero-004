@@ -125,7 +125,7 @@ __global__ void equalizeImage(unsigned char* image, float* cdf, int len)
         // get the uchar value at this element
         unsigned char val = image[i];
         // compute the corrected value
-        int corVal = (int) ((cdf[val] - cdf[0])/(1 - cdf[0])*255);
+        int corVal = (int) ((cdf[val] - cdf[0])/(1. - cdf[0])*255.);
         if(corVal > 255) corVal = 255;
         if(corVal < 0) corVal = 0;
         image[i] = corVal;
@@ -252,10 +252,19 @@ int main(int argc, char ** argv) {
     wbCheck( cudaMemcpy(hostOutputImageData, deviceOutputImageData,
                         imageLen*sizeof(float), cudaMemcpyDeviceToHost) );
 
-    // Debugging: dump out N output pixels
+    // Debugging: dump out N input pixels
     const int nDump = 10;
-    const int start = 10000;
-    float* h = hostOutputImageData;
+    const int start = 0;
+    float* h = hostInputImageData;
+    wbLog(INFO, "Input data");
+    for(int i = start; i < start+nDump; ++i){
+        int idx = 3*i;
+        wbLog(INFO, i, " RGB ", h[idx], ", ", h[idx+1], ", ", h[idx+2]);
+    }
+
+    // Debugging: dump out N output pixels
+    wbLog(INFO, "Output data");
+    h = hostOutputImageData;
     for(int i = start; i < start+nDump; ++i){
         int idx = 3*i;
         wbLog(INFO, i, " RGB ", h[idx], ", ", h[idx+1], ", ", h[idx+2]);
