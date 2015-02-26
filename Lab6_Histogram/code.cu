@@ -32,11 +32,10 @@ __global__ void convertToGrayScale(unsigned char* input, unsigned char* output,
                                    int numPixels)
 {
     // Pixel index
-    int i = (blockIdx.x*blockDim.x + threadIdx.x);
-    // Input array index
-    int inIdx = 3*i;
-    if(inIdx < numPixels){
+    int i = blockIdx.x*blockDim.x + threadIdx.x;
+    if(i < numPixels){
         // Combine red, blue, green to produce gray
+        int inIdx = 3*i;
         unsigned char r = input[inIdx];
         unsigned char g = input[inIdx+1];
         unsigned char b = input[inIdx+2];
@@ -159,8 +158,6 @@ int main(int argc, char ** argv) {
     unsigned int * deviceHist;
     float * deviceCDF;
 
-    //@@ Insert more code here
-
     args = wbArg_read(argc, argv); /* parse the input arguments */
 
     inputImageFile = wbArg_getInputFile(args, 0);
@@ -233,7 +230,7 @@ int main(int argc, char ** argv) {
 
     // Convert RGB to gray-scale
     int blockSize2 = 1024;
-    int gridSize2 = (imageWidth*imageHeight-1) / blockSize2 + 1;
+    int gridSize2 = (numPixels-1) / blockSize2 + 1;
     printf("Converting RGB to grayscale with %i blocks of %i threads\n", gridSize2, blockSize2);
     convertToGrayScale<<<gridSize2, blockSize2>>>(deviceRGBData, deviceGrayData, numPixels);
 
@@ -299,7 +296,7 @@ int main(int argc, char ** argv) {
                         imageLen*sizeof(float), cudaMemcpyDeviceToHost) );
 
     // Debugging: dump out N output pixels
-    printf("Output image data:");
+    printf("Output image data:\n");
     h = hostOutputImageData;
     for(int i = start; i < start+nDump; ++i){
         int idx = 3*i;
