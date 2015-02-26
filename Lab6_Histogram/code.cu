@@ -246,11 +246,14 @@ int main(int argc, char ** argv) {
     }
     // Search grayscale for zeroes
     printf("Searching for zeroes:\n");
+    int count = 0;
     for(unsigned int i = 0; i < numPixels; ++i){
         if(hostGrayData[i] == 0){
             int idx = 3*i;
             printf("  %i Gray %hhu RGB %hhu, %hhu, %hhu\n", i, hostGrayData[i],
                    hostRGBData[idx], hostRGBData[idx+1], hostRGBData[idx+2]);
+            count++;
+            if(count > 20) break;
         }
     }
     delete[] hostRGBData;
