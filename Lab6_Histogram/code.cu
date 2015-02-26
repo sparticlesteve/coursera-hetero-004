@@ -13,11 +13,6 @@
         }                                                                     \
     } while(0)
 
-//@@ insert code here
-
-//
-// Kernels
-//
 
 //-----------------------------------------------------------------------------
 // Convert image array of float into uchar.
@@ -37,12 +32,14 @@ __global__ void convertToGrayScale(unsigned char* input, unsigned char* output,
                                    int numPixels)
 {
     // Pixel index
-    int i = (blockIdx.x*blockDim.x + threadIdx.x)*3;
-    if(i < numPixels){
+    int i = (blockIdx.x*blockDim.x + threadIdx.x);
+    // Input array index
+    int inIdx = 3*i;
+    if(inIdx < numPixels){
         // Combine red, blue, green to produce gray
-        unsigned char r = input[i];
-        unsigned char g = input[i+1];
-        unsigned char b = input[i+2];
+        unsigned char r = input[inIdx];
+        unsigned char g = input[inIdx+1];
+        unsigned char b = input[inIdx+2];
         // These factors were provided in the assignment
         output[i] = (unsigned char) (0.21*r + 0.71*g + 0.07*b);
     }
@@ -209,40 +206,86 @@ int main(int argc, char ** argv) {
     //-------------------------------------------------------------------------
     wbTime_start(Compute, "Performing kernel computations.");
 
+    // Debugging: dump out N input pixels
+    const int nDump = 10;
+    const int start = 0;
+    float* h = hostInputImageData;
+    printf("Input image data:");
+    for(int i = start; i < start+nDump; ++i){
+        int idx = 3*i;
+        printf("  %i RGB %f, %f, %f\n", i, h[idx], h[idx+1], h[idx+2]);
+    }
+
     // Convert image data to unsigned char
     int blockSize1 = 1024;
     int gridSize1 = (imageLen-1) / blockSize1 + 1;
-    wbLog(INFO, "Converting to uchar with blockSize ", blockSize1, ", gridSize ", gridSize1);
+    printf("Converting to uchar with %i blocks of %i threads\n", gridSize1, blockSize1);
     convertToChar<<<gridSize1, blockSize1>>>(deviceInputImageData, deviceRGBData, imageLen);
+
+    // Debugging: dump the uchar
+    unsigned char* hostRGBData = new unsigned char[imageLen];
+    wbCheck( cudaMemcpy(hostRGBData, deviceRGBData, imageLen*sizeof(unsigned char), cudaMemcpyDeviceToHost) );
+    printf("Input RGB:\n");
+    for(unsigned int i = start; i < start+nDump; ++i){
+        int idx = 3*i;
+        printf("  %i RGB %hhu, %hhu, %hhu\n", i, hostRGBData[idx], hostRGBData[idx+1], hostRGBData[idx+2]);
+    }
 
     // Convert RGB to gray-scale
     int blockSize2 = 1024;
     int gridSize2 = (imageWidth*imageHeight-1) / blockSize2 + 1;
-    wbLog(INFO, "Converting RGB to grayscale with blockSize ", blockSize2, ", gridSize ", gridSize2);
+    printf("Converting RGB to grayscale with %i blocks of %i threads\n", gridSize2, blockSize2);
     convertToGrayScale<<<gridSize2, blockSize2>>>(deviceRGBData, deviceGrayData, numPixels);
+
+    // Debugging: dump the grayscale
+    unsigned char * hostGrayData = new unsigned char[numPixels];
+    wbCheck( cudaMemcpy(hostGrayData, deviceGrayData, numPixels*sizeof(unsigned char), cudaMemcpyDeviceToHost) );
+    printf("Grayscale:\n");
+    for(unsigned int i = start; i < start+nDump; ++i){
+        printf("  %i Gray %hhu\n", i, hostGrayData[i]);
+    }
+    // Search grayscale for zeroes
+    printf("Searching for zeroes:\n");
+    for(unsigned int i = 0; i < numPixels; ++i){
+        if(hostGrayData[i] == 0){
+            int idx = 3*i;
+            printf("  %i Gray %hhu RGB %hhu, %hhu, %hhu\n", i, hostGrayData[i],
+                   hostRGBData[idx], hostRGBData[idx+1], hostRGBData[idx+2]);
+        }
+    }
+    delete[] hostRGBData;
+    delete[] hostGrayData;
 
     // Calculate the histogram
     int blockSize3 = 512;
     int gridSize3 = gridSize2/5; // each thread will do ~10 elements
-    wbLog(INFO, "Calculating histogram with blockSize ", blockSize3, ", gridSize ", gridSize3);
+    printf("Calculating histogram with %i blocks of %i threads\n", gridSize3, blockSize3);
     computeHistogram<<<gridSize3, blockSize3>>>(deviceGrayData, deviceHist, numPixels);
+
+    // Debugging: copy histogram and dump
+    unsigned int hostHist[HISTOGRAM_LENGTH];
+    wbCheck( cudaMemcpy(hostHist, deviceHist, HISTOGRAM_LENGTH*sizeof(unsigned int), cudaMemcpyDeviceToHost) );
+    printf("Histogram result:\n");
+    for(unsigned int i = 0; i < HISTOGRAM_LENGTH; ++i){
+        printf("  %i %i\n", i, hostHist[i]);
+    }
 
     // Calculate the CDF via scan
     int blockSize4 = HISTOGRAM_LENGTH/2;
     int gridSize4 = 1;
-    wbLog(INFO, "Calculating CDF with blockSize ", blockSize4, ", gridSize ", gridSize4);
+    printf("Calculating CDF with %i blocks of %i threads\n", gridSize4, blockSize4);
     computeCDF<<<gridSize4, blockSize4>>>(deviceHist, deviceCDF, numPixels);
 
     // Equalize the RGB image data using the CDF
     int blockSize5 = blockSize1;
     int gridSize5 = gridSize1;
-    wbLog(INFO, "Equalizing the RGB with blockSize ", blockSize5, ", gridSize ", gridSize5);
+    printf("Equalizing the RGB with %i blocks of %i threads\n", gridSize5, blockSize5);
     equalizeImage<<<gridSize5, blockSize5>>>(deviceRGBData, deviceCDF, imageLen);
 
     // Convert uchar image data back to float
     int blockSize6 = blockSize1;
     int gridSize6 = gridSize1;
-    wbLog(INFO, "Converting to float with blockSize ", blockSize6, ", gridSize ", gridSize6);
+    printf("Converting to float with %i blocks of %i threads\n", gridSize6, blockSize6);
     convertCharToFloat<<<blockSize6, gridSize6>>>(deviceRGBData, deviceOutputImageData, imageLen);
 
     // End kernel computations
@@ -252,22 +295,12 @@ int main(int argc, char ** argv) {
     wbCheck( cudaMemcpy(hostOutputImageData, deviceOutputImageData,
                         imageLen*sizeof(float), cudaMemcpyDeviceToHost) );
 
-    // Debugging: dump out N input pixels
-    const int nDump = 10;
-    const int start = 0;
-    float* h = hostInputImageData;
-    wbLog(INFO, "Input data");
-    for(int i = start; i < start+nDump; ++i){
-        int idx = 3*i;
-        wbLog(INFO, i, " RGB ", h[idx], ", ", h[idx+1], ", ", h[idx+2]);
-    }
-
     // Debugging: dump out N output pixels
-    wbLog(INFO, "Output data");
+    printf("Output image data:");
     h = hostOutputImageData;
     for(int i = start; i < start+nDump; ++i){
         int idx = 3*i;
-        wbLog(INFO, i, " RGB ", h[idx], ", ", h[idx+1], ", ", h[idx+2]);
+        printf("  %i RGB %f, %f, %f\n", i, h[idx], h[idx+1], h[idx+2]);
     }
 
     // Check solution
@@ -286,8 +319,6 @@ int main(int argc, char ** argv) {
     // Free host memory
     wbImage_delete(inputImage);
     wbImage_delete(outputImage);
-
-    //@@ insert code here
 
     return 0;
 }
