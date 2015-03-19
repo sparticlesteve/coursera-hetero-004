@@ -17,9 +17,6 @@ __global__ void vecAdd(float * in1, float * in2, float * out, int len) {
         out[i] = in1[i] + in2[i];
 }
 
-// Function for transferring a chunk asyncronously via a stream
-//cudaError_t copySegment(float* out, float* in, int n, cudaMemcpyKind kind, cudaStream_t stream)
-
 
 int main(int argc, char ** argv) {
     wbArg_t args;
@@ -33,11 +30,10 @@ int main(int argc, char ** argv) {
 
     args = wbArg_read(argc, argv);
 
-    // TODO: try pinned host memory
     wbTime_start(Generic, "Importing data and creating memory on host");
     hostInput1 = (float *) wbImport(wbArg_getInputFile(args, 0), &inputLength);
     hostInput2 = (float *) wbImport(wbArg_getInputFile(args, 1), &inputLength);
-    hostOutput = (float *) malloc(inputLength * sizeof(float));
+    wbCheck( cudaMallocHost((void**)&hostOutput, inputLength*sizeof(float)) );
     wbTime_stop(Generic, "Importing data and creating memory on host");
     
     // Allocate memory on the device
@@ -47,37 +43,75 @@ int main(int argc, char ** argv) {
     wbCheck( cudaMalloc((void**)&deviceInput1, size) );
     wbCheck( cudaMalloc((void**)&deviceInput2, size) );
     wbCheck( cudaMalloc((void**)&deviceOutput, size) );
-    
-    // Create the streams.
-    // Let's now do 2 streams.
-    cudaStream_t stream0, stream1;
-    cudaStreamCreate(&stream0);
-    cudaStreamCreate(&stream1);
-    
+        
     // Block and segment size
-    // Start with one segment
+    // Segment size needs to be >= block size
     const int blockSize = 256;
-    int segSize = inputLength/2;
+    int segSize = 512;
     int gridSize = (segSize-1) / blockSize + 1;
-    
-    printf("InputLength %i, blockSize %i, segSize %i, gridSize %i\n",
-           inputLength, blockSize, segSize, gridSize);
+    int numSegments = (inputLength-1) / segSize + 1;
 
-    // Asynchronous transfer of stream0
-    wbCheck( cudaMemcpyAsync(deviceInput1, hostInput1, segSize*sizeof(float), cudaMemcpyHostToDevice, stream0) );
-    wbCheck( cudaMemcpyAsync(deviceInput2, hostInput2, segSize*sizeof(float), cudaMemcpyHostToDevice, stream0) );
+    // Create the streams
+    int nStreams = numSegments;
+    cudaStream_t* streams = new cudaStream_t[nStreams];
+    for(int i = 0; i < nStreams; ++i)
+        wbCheck( cudaStreamCreate(&streams[i]) );
     
-    // Asynchronous transfer of stream1
-    wbCheck( cudaMemcpyAsync(deviceInput1+segSize, hostInput1+segSize, segSize*sizeof(float), cudaMemcpyHostToDevice, stream1) );
-    wbCheck( cudaMemcpyAsync(deviceInput2+segSize, hostInput2+segSize, segSize*sizeof(float), cudaMemcpyHostToDevice, stream1) );
+    printf("InputLength %i, nSeg %i, segSize %i, gridSize %i, blockSize %i\n",
+           inputLength, numSegments, segSize, gridSize, blockSize);
+    
+    // Begin the loop over segments.
+    // Each iteration of the loop will process one operation on each stream,
+    // except at the boundaries. In order to ensure that the final streams
+    // finish and are retrieved, we need to iterate 2 extra segments in the loop.
+    for(int i = 0; i < numSegments + 2; ++i){
 
-    // Perform computation
-    vecAdd<<<gridSize, blockSize, 0, stream0>>>(deviceInput1, deviceInput2, deviceOutput, inputLength);
-    vecAdd<<<gridSize, blockSize, 0, stream1>>>(deviceInput1+segSize, deviceInput2+segSize, deviceOutput+segSize, inputLength);
+        printf("Loop iteration %i\n", i);
+
+        // Schedule a return transfer.
+        // Only performed starting from 3rd iteration.
+        if(i >= 2){
+            // My segment number: 2 streams previous
+            int iSeg = i - 2;
+            // My element offset
+            int offset = iSeg*segSize;
+            // Calculate the bytes to transfer
+            int bytes = segSize*sizeof(float);
+            if(offset + segSize > inputLength)
+                bytes = (inputLength-offset)*sizeof(float);
+            // Do the transfer
+            printf("  retrieving segment %i, offset %i, bytes %i\n", iSeg, offset, bytes);
+            wbCheck( cudaMemcpyAsync(hostOutput+offset, deviceOutput+offset, bytes, cudaMemcpyDeviceToHost, streams[iSeg]) );
+        }
+        
+        // Schedule computation.
+        if(i >= 1 && i < numSegments + 1){
+            // My segment number: the previous stream
+            int iSeg = i - 1;
+            // My element offset
+            int offset = iSeg*segSize;
+            printf("  computing segment  %i, offset %i\n", iSeg, offset);
+            vecAdd<<<gridSize, blockSize, 0, streams[iSeg]>>>(deviceInput1+offset, deviceInput2+offset, deviceOutput+offset, inputLength);    
+        }
+        
+        // Scheduling outgoing transfer.
+        // Not performed for last 2 iterations.
+        if(i < numSegments){
+            // My segment number: this one
+            int iSeg = i;
+            // My element offset
+            int offset = iSeg*segSize;
+            // Calculate the bytes to transfer
+            int bytes = segSize*sizeof(float);
+            if(offset + segSize > inputLength)
+                bytes = (inputLength-offset)*sizeof(float);
+            // Do the transfers
+            printf("  sending segment    %i, offset %i, bytes %i\n", iSeg, offset, bytes);
+            wbCheck( cudaMemcpyAsync(deviceInput1+offset, hostInput1+offset, bytes, cudaMemcpyHostToDevice, streams[iSeg]) );
+            wbCheck( cudaMemcpyAsync(deviceInput2+offset, hostInput2+offset, bytes, cudaMemcpyHostToDevice, streams[iSeg]) );
+        }
     
-    // Asynchronous return transfer
-    wbCheck( cudaMemcpyAsync(hostOutput, deviceOutput, segSize*sizeof(float), cudaMemcpyDeviceToHost, stream0) );
-    wbCheck( cudaMemcpyAsync(hostOutput+segSize, deviceOutput+segSize, segSize*sizeof(float), cudaMemcpyDeviceToHost, stream1) );
+    }
 
     // Wait for remaining streams to finish
     wbCheck( cudaDeviceSynchronize() );
@@ -100,7 +134,7 @@ int main(int argc, char ** argv) {
     // Free host memory
     free(hostInput1);
     free(hostInput2);
-    free(hostOutput);
+    wbCheck( cudaFreeHost(hostOutput) );
 
     return 0;
 }
